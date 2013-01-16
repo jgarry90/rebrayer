@@ -1,0 +1,9 @@
+Express server listening on port 8080
+[90mGET /tops.html [32m200 [90m3ms - 4.18kb[0m
+[90mGET /stylesheets/styleRebrayer.css [36m304 [90m1ms[0m
+[90mGET /tops [32m200 [90m2ms - 418[0m
+[90mGET /JGarrido-rebrayer.ppt [32m200 [90m2350ms - 1020kb[0m
+[90mGET /tops.html [36m304 [90m1ms[0m
+[90mGET /stylesheets/styleRebrayer.css [36m304 [90m0ms[0m
+[90mGET /tops [32m200 [90m1ms - 418[0m
+[90mGET /JGarrido-rebrayer.ppt [32m200 [90m2338ms - 1020kb[0m

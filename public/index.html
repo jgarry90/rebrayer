@@ -1,0 +1,626 @@
+<!DOCTYPE html> 
+<html><head> 
+<title>REBRAYER</title> 
+
+<script src="http://code.onilabs.com/apollo/0.13/oni-apollo.js"></script> 
+
+<link rel="stylesheet" type="text/css" href="stylesheets/styleRebrayer.css" /> 
+<script type="text/sjs"> 
+
+ 
+var API_KEY = "hR2cjbKfwYVBNe1Y6gFHYg";
+
+var VERSION = "1.1";
+
+
+//----------------------------------------------------------------------
+// Initialization
+  
+// Load the @Anywhere API and init with your application id:
+var T = require("apollo:twitter").initAnywhere({v:VERSION, id:API_KEY});
+
+require("apollo:jquery-binding").install();
+ 
+var common = require("apollo:common");
+ 
+var tweeting_button = $("#tweeting_button");
+var status_el = $("#status");
+var counter = $("#tweeting_status");
+
+var id_u;
+
+
+//----------------------------------------------------------------------
+// main program loop
+ 
+// Show the twitter connect button:
+T("#login").connectButton();
+// Run our application logic in an endless loop:
+while (true) {
+  try {
+    main();
+  }
+  catch(e) {
+    alert("Error:"+e);
+  }
+}
+
+
+//----------------------------------------------------------------------
+// main application logic:
+ 
+function main() {
+  // First wait until we're connected:
+  if (!T.isConnected())
+    T.waitforEvent("authComplete");
+  $("#login").hide();
+  $("#welcome").hide();
+  $("#rebuznos_bar").show();
+  $("#tweets_bar").show();
+  $("#rebuznos_timeline").empty();
+  $("#timeline").empty();
+  
+  try {
+    // Let's set the last tweet and the background based on the
+    // user's prefs:
+    
+    var profile = T.call("users/show", {user_id: T.currentUser.id});
+    id_u = profile.id_str;
+
+
+	var follows = T.call("friends/ids");
+
+
+	var follows_arr = follows.ids;
+	for (var i=0;i<follows_arr.length;i++){
+        follows_arr[i] = follows_arr[i].toString();
+	}
+	follows_arr[follows_arr.length] = "702822542";
+
+	var request = makeHttpObject();
+    request.open("POST", "/follows", true);
+    var follows_send = JSON.stringify(follows_arr);
+
+    request.setRequestHeader("Content-Type", "application/json;charset=UTF-8");
+    request.send(follows_send);
+    request.onreadystatechange = function() {
+    if (request.readyState == 4) {
+
+	  var data = JSON.parse(request.responseText);
+			//pintar tweets en rebuznos...
+				for (var i=data.length-1;i>=0;i--){
+					Mostrar3(data[i].id_t);
+				}
+    }
+  };
+
+ 
+    $("#current_user").text(profile.screen_name);
+    $("#current_user").prepend("<img src='"+profile.profile_image_url + "'/>");
+    setLatestTweet(profile.status);
+    $("body").css({
+      background: common.supplant("#{color} url({image}) {repeat}", {
+        color:  profile.profile_background_color,
+        image:  profile.profile_background_image_url,
+        repeat: profile.profile_background_tile ? "repeat" : "no-repeat"
+      }) 
+    }); 
+
+    
+  
+    // Now we'll do several things in parallel, by combining them with
+    // the stratified construct waitfor/and:
+    waitfor {
+      waitfor_signout();
+      // Now exit main(). The other clauses in the waitfor/and will
+      // automatically be aborted cleanly (i.e. eventlisteners will be
+      // removed, etc).
+      return;
+    }
+    and {
+      // Endlessly handle tweets by the user:
+      tweet_loop();
+    }
+    and {
+      // Endlessly update the timeline:
+      update_timeline_loop();
+    }
+    and {
+      // Endlessly load older tweets when the user scrolls down:
+      show_more_loop();
+    }
+    and {
+      ui_mute_loop();
+    }
+  }
+  finally {
+    // Clean up:
+    $("#current_user").empty();
+    $("#timeline").empty();
+    $("#rebuznos_timeline").empty();
+    $("#welcome").show();
+    $("#rebuznos_bar").hide();
+    $("#tweets_bar").hide();
+    $("body").css({background:""});
+  }
+}
+
+ 
+
+
+
+
+
+//----------------------------------------------------------------------
+// Helper functions
+ 
+function setLatestTweet(tweet) {
+  $("#latest")[tweet?"show":"hide"]();
+  if (tweet)
+    $("#latest span").text(tweet.text);
+}
+
+
+
+// 'characters left' counter
+function update_counter() {
+  counter.text(140 - status_el.val().length);
+}
+
+
+function ui_mute_loop() {
+  if (!window["localStorage"]) return;
+  
+  var filterArray = [];
+  tweetFilter = function(tweet) {
+    for (var i = filterArray.length; i >= 0; --i) {
+      var keyword = filterArray[i];
+      if (!keyword) continue;
+      if (keyword.indexOf("@") == 0 && tweet.user.screen_name == keyword.substring(1)) return true;
+      else if (tweet.text.indexOf(keyword) != -1) return true;
+    }
+
+    return false;
+  };
+  
+  var button = $("<a href='#'>Mute list</a>").prependTo("#session_buttons");
+  try {
+    while(true) {
+      filterArray = localStorage.mute ? localStorage.mute.split(" ") : [];
+      button.$click();
+      var rv = prompt("Enter a space-separated list of #keywords or @users you want to mute.", localStorage.mute);
+      if (rv != null) {
+        localStorage.mute = rv;
+        $(window).trigger("settingschanged");
+      }
+    }
+  } finally {
+    button.remove();
+  }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////
+
+// Append/prepend a tweet to the timeline
+function showTweet(tweet, append) {
+  if (window["tweetFilter"] && tweetFilter(tweet)) return;
+
+  var date = new Date(tweet.created_at.replace(/^\w+ (\w+) (\d+) ([\d:]+) \+0000 (\d+)$/,
+                                               "$1 $2 $4 $3 UTC"));
+  var elapsed = Math.round(((new Date()).getTime() - date.getTime()) / 60000);
+  if (elapsed < 60) {
+    var date_string = elapsed + " minutes";
+  }
+  else if (elapsed < 60*24) {
+    var date_string = Math.round(elapsed / 60) + " hours";
+  }
+  else {
+    var date_string = date.getDate() + "/" + date.getMonth();
+  }
+
+  if (tweet.entities && tweet.entities.urls) {
+    for (var i = tweet.entities.urls.length - 1, entity; entity = tweet.entities.urls[i]; --i) {
+      tweet.text = common.supplant("{a}<a target='_blank' href='{b}'>{b}</a>{c}", {
+        a: tweet.text.substring(0, entity.indices[0]),
+        b: entity.url,
+        c: tweet.text.substring(entity.indices[1])
+      });
+    }
+  }
+  
+	
+	var ini = tweet.id_str.slice(0,12);
+	var fin = tweet.id_str.slice(12);
+	
+	var c = tweet.id_str;
+	
+  $("#timeline")[append ? "append" : "prepend"](common.supplant("\
+    <div class='timeline_item user_{screenname}'>
+      <div class='tweet_wrapper' tweetid='{tweetid}'>
+        <span class='tweet_thumb'>
+          <img src='{image}' width='48' height='48'/>
+        </span>
+        <span class='tweet_body'>
+          <span class='screenname'>{screenname}</span>
+          <span class='content'>{text}</span>
+          <span class='meta'>{meta}</span> 
+          <span class='rebraying_button_container'>
+              <span class='rebraying_status'></span>
+              <button OnClick='{Mostrar2({tweet_ini},{tweet_fin},{id_d})}'>Rebuznar</button>
+    </span>
+ 
+       </span>
+      </div>
+    </div>
+    ", {
+      tweetid: tweet.id,
+      text: tweet.text, 
+      image: tweet.user.profile_image_url,
+      screenname: tweet.user.screen_name,
+      meta: date_string,
+      tweet_ini: ini,
+      tweet_fin: fin,
+      id_d: tweet.user.id_str
+    }));
+}
+
+function Mostrar2(ini, fin, id_d){
+
+			var a = ini.toString() + fin.toString();
+				
+ try {
+	
+    a = a.toString();
+	
+    var tweet = T.call("statuses/show", {id: a });
+    
+  
+    if (window["tweetFilter"] && tweetFilter(tweet)) return;
+
+  var date = new Date(tweet.created_at.replace(/^\w+ (\w+) (\d+) ([\d:]+) \+0000 (\d+)$/,
+                                               "$1 $2 $4 $3 UTC"));
+  var elapsed = Math.round(((new Date()).getTime() - date.getTime()) / 60000);
+  if (elapsed < 60) {
+    var date_string = elapsed + " minutes";
+  }
+  else if (elapsed < 60*24) {
+    var date_string = Math.round(elapsed / 60) + " hours";
+  }
+  else {
+    var date_string = date.getDate() + "/" + date.getMonth();
+  }
+
+  if (tweet.entities && tweet.entities.urls) {
+    for (var i = tweet.entities.urls.length - 1, entity; entity = tweet.entities.urls[i]; --i) {
+      tweet.text = common.supplant("{a}<a target='_blank' href='{b}'>{b}</a>{c}", {
+        a: tweet.text.substring(0, entity.indices[0]),
+        b: entity.url,
+        c: tweet.text.substring(entity.indices[1])
+      });
+    }
+  }
+  
+  
+  	var ini = tweet.id_str.slice(0,12);
+	var fin = tweet.id_str.slice(12);
+  
+        $("#rebuznos_timeline")[false ? "append" : "prepend"](common.supplant("\
+    <div class='timeline_item user_{screenname}'>
+      <div class='tweet_wrapper' tweetid='{tweetid}'>
+        <span class='tweet_thumb'>
+          <img src='{image}' width='48' height='48'/>
+        </span>
+        <span class='tweet_body'>
+          <span class='screenname'>{screenname}</span>
+          <span class='content'>{text}</span>
+          <span class='meta'>{meta}</span> 
+          <span class='rebraying_button_container'>
+              <span class='rebraying_status'></span>
+              <button OnClick='{Mostrar2({tweet_ini},{tweet_fin},{id_d})}'>Rebuznar</button>
+		  </span>
+ 
+       </span>
+      </div>
+    </div>
+    ", {
+      tweetid: tweet.id,
+      text: tweet.text, 
+      image: tweet.user.profile_image_url,
+      screenname: tweet.user.screen_name,
+      meta: date_string,
+      tweet_ini: ini,
+      tweet_fin: fin,
+      id_d: tweet.user.id_str
+    }));
+
+  var request = makeHttpObject();
+  request.open("POST", "/rebray", false);
+  var resp = {id_t: tweet.id_str, id_u: id_u, id_d: id_d} ;
+  resp = JSON.stringify(resp);
+  request.setRequestHeader("Content-Type", "application/json;charset=UTF-8");
+  request.send(resp);
+    
+  }
+  catch(e) {
+    // Are we still connected? If not, quit the app:
+    if (!T.isConnected())
+      throw "Disconnected";
+  }
+
+} 
+
+
+
+function Mostrar3(id_t){
+			
+ try {
+	
+    var tweet = T.call("statuses/show", {id: id_t });
+    
+    if (window["tweetFilter"] && tweetFilter(tweet)) return;
+
+  var date = new Date(tweet.created_at.replace(/^\w+ (\w+) (\d+) ([\d:]+) \+0000 (\d+)$/,
+                                               "$1 $2 $4 $3 UTC"));
+  var elapsed = Math.round(((new Date()).getTime() - date.getTime()) / 60000);
+  if (elapsed < 60) {
+    var date_string = elapsed + " minutes";
+  }
+  else if (elapsed < 60*24) {
+    var date_string = Math.round(elapsed / 60) + " hours";
+  }
+  else {
+    var date_string = date.getDate() + "/" + date.getMonth();
+    if(date.getMonth() == 0){date_string = date.getDate() + "/" + (date.getMonth()+1);}
+  }
+
+  if (tweet.entities && tweet.entities.urls) {
+    for (var i = tweet.entities.urls.length - 1, entity; entity = tweet.entities.urls[i]; --i) {
+      tweet.text = common.supplant("{a}<a target='_blank' href='{b}'>{b}</a>{c}", {
+        a: tweet.text.substring(0, entity.indices[0]),
+        b: entity.url,
+        c: tweet.text.substring(entity.indices[1])
+      });
+    }
+  }
+  
+  
+  	var ini = tweet.id_str.slice(0,12);
+	var fin = tweet.id_str.slice(12);
+  
+        $("#rebuznos_timeline")[false ? "append" : "prepend"](common.supplant("\
+    <div class='timeline_item user_{screenname}'>
+      <div class='tweet_wrapper' tweetid='{tweetid}'>
+        <span class='tweet_thumb'>
+          <img src='{image}' width='48' height='48'/>
+        </span>
+        <span class='tweet_body'>
+          <span class='screenname'>{screenname}</span>
+          <span class='content'>{text}</span>
+          <span class='meta'>{meta}</span> 
+          <span class='rebraying_button_container'>
+              <span class='rebraying_status'></span>
+              <button OnClick='{Mostrar2({tweet_ini},{tweet_fin},{id_d})}'>Rebuznar</button>
+    </span>
+ 
+       </span>
+      </div>
+    </div>
+    ", {
+      tweetid: tweet.id,
+      text: tweet.text, 
+      image: tweet.user.profile_image_url,
+      screenname: tweet.user.screen_name,
+      meta: date_string,
+      tweet_ini: ini,
+      tweet_fin: fin,
+      id_d: tweet.user.id_str
+    }));
+    
+      }
+  catch(e) {
+    // Are we still connected? If not, quit the app:
+    if (!T.isConnected())
+      throw "Disconnected";
+
+  }
+} 
+
+ 
+// Helper to fetch new tweets:
+function fetch_tweets(params) {
+  try {
+    return T.call("statuses/home_timeline", params);
+  }
+  catch(e) {
+    // Are we still connected? If not, quit the app:
+    if (!T.isConnected())
+      throw "Disconnected";
+    // else try again in 10s:
+    // XXX should really have a back-off algo here
+    // XXX should examine exception object.
+    hold(10*1000);
+    return fetch_tweets(params);
+  }
+}
+ 
+// Function that periodically fetches new tweets from twitter and
+// displays them:
+function update_timeline_loop() {
+  // Run an endless loop:
+  while (true) {
+    // Fetch tweets from twitter:
+    var timeline = fetch_tweets({
+      include_entities: true,
+      count: 30,
+      since_id: $(".tweet_wrapper:first").attr("tweetid")
+    });
+ 
+    if (timeline && timeline.length) {
+      // Prepend tweets to timeline:
+      for (var i = timeline.length-1, tweet; tweet = timeline[i]; --i)
+        showTweet(tweet, false);
+    }
+
+    waitfor {
+      // Twitter is rate-limited to ~150calls/h. Wait for 60 seconds
+      // until we fetch more tweets.
+      hold(60*1000);
+    }
+    or {
+      $(window).waitFor("settingschanged");
+      $("#timeline").empty();
+    }
+  }
+}
+ 
+// Helper that waits until the user scrolls to the bottom of the page:
+function waitforScrollToBottom() {
+  do {
+    $(window).$scroll();
+  }
+  while ($(document).height()- $(window).height() - $(document).scrollTop() > 300)
+}
+ 
+// Runs a loop that waits for the user to scroll to the bottom, and
+// then loads more tweets:
+function show_more_loop() {
+  while (true) {
+    waitforScrollToBottom();
+ 
+    var timeline = null;
+    waitfor {
+      // show a cancel button:
+      $("#timeline").append("\
+        <div class='timeline_item loading_more'>
+          Loading more tweets... click here to cancel
+        </div>");
+      // wait for it to be clicked; if that happens before the request
+      // completes, the request will be cancelled, by virtue of the
+      // waitfor/or.
+      $(".timeline_item:last").$click();
+    }
+    or {
+      timeline = fetch_tweets({
+        count: 30,
+        max_id: $(".tweet_wrapper:last").attr("tweetid")-1
+      });
+      if (!timeline.length) return; // we've loaded all tweets there are
+    }
+    finally {
+      // remove the cancel button:
+      $(".timeline_item:last").remove();
+    }
+    
+    if (timeline && timeline.length) {
+      // Append tweets to timeline:
+      for (var i = 0, tweet; tweet = timeline[i]; ++i)
+        showTweet(tweet, true);
+    }
+  }
+}
+ 
+// Runs an endless loop that checks for the 'tweet' button to be
+// clicked and sends out a tweet if it is:
+function tweet_loop() {
+  try {
+    $(".tweet_box").show();
+    while (true) {
+      tweeting_button.$click();
+      tweeting_button.attr("disabled", "disabled");
+      $("#tweeting_status").text("Tweeteando...");
+      try {
+        var tweet = T.call("statuses/update", {status: status_el.val() });
+        status_el.val("");
+        showTweet(tweet);
+        setLatestTweet(tweet);
+      }
+      catch (e) {
+        alert("Error posting: " + e.response.error);
+      }
+      update_counter();
+      tweeting_button.removeAttr("disabled");
+    }
+  }
+  finally {
+    $(".tweet_box").hide();
+  }
+}
+ 
+// shows a signout button and blocks until it is clicked
+function waitfor_signout() {
+  try {
+    // Show a signout button and wait for it to be clicked:
+    var signout = $("<a href='#'>Salir de Twitter</a>").appendTo("#logout");
+    var e = signout.$click();
+    e.returnValue = false;
+    e.preventDefault();
+  
+    // Ok, signout button was clicked; sign out, hide button & clear timeline:
+    twttr.anywhere.signOut();
+  }
+  finally {
+    signout.remove();
+    $("#login").show();
+  }
+}
+
+
+
+      
+function makeHttpObject() {
+  try {return new XMLHttpRequest();}
+  catch (error) {}
+  try {return new ActiveXObject("Msxml2.XMLHTTP");}
+  catch (error) {}
+  try {return new ActiveXObject("Microsoft.XMLHTTP");}
+  catch (error) {}
+
+  throw new Error("Could not create HTTP request object.");
+}
+
+
+
+
+</script> 
+
+</head> 
+<body> 
+<div id="top_bar"> 
+  <div id="session_buttons"> 
+    <div id="current_user"></div> 
+    <div id="login"></div> 
+    <div id="logout"></div> 
+  </div> 
+  <div id="top_wrapper_bar">
+  	<div id="title_bar">Cliente de Rebrayer</div>
+	<div id="tops_bar" ><a href="/tops.html">Ver tops</a></div>
+  </div> 
+</div> 
+<div id="wrapper"> 
+  <div class="tweet_box"> 
+    <h2>Escribe un nuevo tweet</h2> 
+    <div id="info"> 
+      <textarea id="status" onkeyup="update_counter(this)"></textarea> 
+      <span id="latest"><strong>Ultimo tweet: </strong><span></span></span> 
+      <span id="tweeting_button_container"> 
+        <span id="tweeting_status"></span> 
+        <button id="tweeting_button">Tweet</button> 
+      </span> 
+    </div> 
+ </div> 
+<div id="wrapper_timeline"> 
+    <div id="rebuznos_bar">Rebuznos</div>     <div id="tweets_bar">Tweets</div> 
+    <div id="rebuznos_timeline"></div> <div id="timeline"></div>
+ </div>
+    
+
+</div> 
+<div id="welcome"> 
+  Bienvenido a  <strong>REBRAYER</strong>
+  <p> 
+  Conectate a Rebrayer usando el boton de la esquina superior derecha.<br/>  
+  </p> 
+</div> 
+</body> 
+ 
+</html>

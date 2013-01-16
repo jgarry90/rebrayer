@@ -1,0 +1,163 @@
+<!DOCTYPE html> 
+<html><head> 
+<title>REBRAYER - TOPS</title> 
+
+<script src="http://code.onilabs.com/apollo/0.13/oni-apollo.js"></script> 
+
+<link rel="stylesheet" type="text/css" href="stylesheets/styleRebrayer.css" /> 
+<script type="text/sjs"> 
+
+//----------------------------------------------------------------------
+// Initialization
+  
+var API_KEY = "hR2cjbKfwYVBNe1Y6gFHYg";
+
+var VERSION = "1.1";
+ 
+// We'll use jquery; load it from Google's CDN and install stratified
+// bindings ($click, etc):
+require("apollo:jquery-binding").install();
+ 
+// We'll also use various methods from the common module (supplant, ...)
+var common = require("apollo:common");
+var T = require("apollo:twitter").initAnywhere({v:VERSION, id:API_KEY});
+
+
+
+
+//----------------------------------------------------------------------
+// main program
+main();
+
+
+var res;
+
+
+//----------------------------------------------------------------------
+// main application logic:
+ 
+function main() {
+	
+  $("#rebuznos_bar").show();
+  $("#tweets_bar").show();
+
+  var request = makeHttpObject();
+  request.open("GET", "/tops", true);
+  request.send(null);
+  request.onreadystatechange = function() {
+    if (request.readyState == 4) {
+      if (request.status == 200){
+	  res = JSON.parse(request.responseText);
+	  showRanking();
+	  }
+    }
+  };
+}
+
+ 
+//----------------------------------------------------------------------
+// Helper functions
+ 
+
+
+////////////////////////////////////////////////////////////////////////////////////////
+
+// Append/prepend a tweet to the conteder_0
+function showRanking() {
+var append = false;
+
+///////////// Rebuznos
+
+for(var x = res.rebrays.length - 1; x >= 0; x--){
+	var tweet = T.call("statuses/show", {id: res.rebrays[x].id_t });
+	
+  $("#rebuznos_timeline")[append ? "append" : "prepend"](common.supplant("\
+    <div class='timeline_item user_{screenname}'>
+      <div class='tweet_wrapper' tweetid='{tweetid}'>
+        <span class='tweet_thumb'>
+          <img src='{image}' width='48' height='48'/>
+        </span>
+        <span class='tweet_body'>
+          <span class='screenname'>{screenname}</span>
+          <span class='content'>{text}</span>
+          <span class='meta'>{meta}</span> 
+       </span>
+      </div>
+    </div>
+    ", {
+      tweetid: tweet.id,
+      text: tweet.text, 
+      image: tweet.user.profile_image_url,
+      screenname: tweet.user.screen_name,
+      meta: "Rebrayed " +res.rebrays[x].rebrayed_c + " times.",
+    }));
+  }
+ 
+  for(var x = res.users.length - 1; x >= 0; x--){
+    var user = T.call("users/show", {id: res.users[x].id_u });
+
+    $("#timeline")[append ? "append" : "prepend"](common.supplant("\
+    <div class='timeline_item user_{screenname}'>
+      <div class='tweet_wrapper' tweetid='{tweetid}'>
+        <span class='tweet_thumb'>
+          <img src='{image}' width='48' height='48'/>
+        </span>
+        <span class='tweet_body'>
+          <span class='screenname'>{screenname}</span>
+          <span class='meta'>{meta}</span> 
+       </span>
+      </div>
+    </div>
+    ", {
+      tweetid: user.id,
+      image: user.profile_image_url,
+      screenname: user.screen_name,
+      meta: "Rebrayed " +res.users[x].rebrayed_c + " times.",
+    }));
+  }
+}
+
+
+
+
+//////////////////////////////////////
+
+function makeHttpObject() {
+  try {return new XMLHttpRequest();}
+  catch (error) {}
+  try {return new ActiveXObject("Msxml2.XMLHTTP");}
+  catch (error) {}
+  try {return new ActiveXObject("Microsoft.XMLHTTP");}
+  catch (error) {}
+
+  throw new Error("Could not create HTTP request object.");
+}
+
+
+
+
+
+
+
+</script> 
+</head> 
+<body> 
+<div id="top_bar"> 
+  <div id="session_buttons"> 
+    <div id="current_user"></div> 
+    <div id="login"></div> 
+    <div id="logout"></div> 
+  </div> 
+  <div id="top_wrapper_bar">
+  	<div id="title_bar">Cliente de Rebrayer</div>
+	<div id="tops_bar" ><a href="/index.html">Volver</a></div>
+  </div> 
+</div> 
+<div id="wrapper"> 
+<div id="wrapper_timeline"> 
+    <div id="rebuznos_bar">Rebuznos</div>     <div id="tweets_bar">Usuarios</div> 
+    <div id="rebuznos_timeline"></div> <div id="timeline"></div>
+ </div>
+</div>
+</body> 
+</html>
